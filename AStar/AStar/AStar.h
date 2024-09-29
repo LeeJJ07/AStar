@@ -8,7 +8,7 @@
 using namespace std;
 
 enum State { WSTART, WEND, MOVE, FINISH };
-enum tileState { BLANK, OPEN, CLOSE, WALL };
+enum tileState { BLANK, OPEN, START, END, WALL };
 // 짝수 : 10, 홀수 : 14
 int dy[] = { -1, -1, 0, 1, 1, 1, 0, -1 };
 int dx[] = { 0, 1, 1, 1, 0, -1, -1, -1 };
@@ -17,6 +17,7 @@ typedef struct tile
 {
 	int f;
 	int g, h;
+	POINT prev;
 	tileState tState;
 }Tile;
 
@@ -30,6 +31,7 @@ private:
 	POINT player;
 	Tile** map;
 	vector<POINT> road;
+	vector<POINT> playerMove;
 	vector<POINT> blocks;
 	State state = WSTART;
 
@@ -68,23 +70,27 @@ public:
 	}
 	POINT GetMapStartPos() { return { startX, startY }; }
 	int GetTileLen() { return len; }
-	void SetStart(int x, int y) { s = { x, y }; player = { x,y }; }
-	void SetEnd(int x, int y) { e = { x, y }; }
+	void SetStart(int x, int y) { s = { x, y }; player = { x, y }; map[y][x].tState = START; }
+	void SetEnd(int x, int y) { e = { x, y }; map[y][x].tState = END; }
 	POINT GetStart() { return s; }
 	POINT GetEnd() { return e; }
 	int GetValueG(int x, int y) { return map[y][x].g; }
 
 	void SetMap()
 	{
+		road.clear();
+		blocks.clear();
+		s.x = s.y = -1;
+		e.x = e.y = -1;
 		for (int i = 0; i < rowSize; i++)
 		{
 			for (int j = 0; j < colSize; j++)
 			{
-				if (map[i][j].g == -1) continue;
 				map[i][j].g = 0;
 				map[i][j].h = -1;
 				map[i][j].f = map[i][j].g + map[i][j].h;
 				map[i][j].tState = BLANK;
+				map[i][j].prev = { -1, -1 };
 			}
 		}
 	}
@@ -111,6 +117,7 @@ public:
 		HBRUSH redBrush = CreateSolidBrush(RGB(255, 0, 0));
 		HBRUSH blueBrush = CreateSolidBrush(RGB(0, 0, 255));
 		HBRUSH greenBrush = CreateSolidBrush(RGB(0, 255, 0));
+		HBRUSH orangeBrush = CreateSolidBrush(RGB(255, 165, 0));
 		HBRUSH oldBrush = (HBRUSH)SelectObject(hMemDC, blockBrush);
 
 		HFONT currentFont = CreateFont(15, 0, 0, 0, 0, 0, 0, 0, HANGEUL_CHARSET, 0, 0, 0,
@@ -126,6 +133,7 @@ public:
 				Rectangle(hMemDC, center.x - len / 2, center.y - len / 2, center.x + len / 2, center.y + len / 2);
 
 				TCHAR szString1[15], szString2[15];
+				//_stprintf_s(szString1, _countof(szString1), _T("%3d  %3d"), map[i][j].prev.x, map[i][j].prev.y);
 				_stprintf_s(szString1, _countof(szString1), _T("%3d  %3d"), map[i][j].g, map[i][j].h);
 				_stprintf_s(szString2, _countof(szString2), _T("  %d "), map[i][j].f);
 				TextOut(hMemDC, center.x - 20, center.y - 20, szString1, wcslen(szString1));
@@ -134,6 +142,14 @@ public:
 		}
 		SelectObject(hMemDC, oldBrush);
 		SelectObject(hMemDC, oldFont);
+
+		oldBrush = (HBRUSH)SelectObject(hMemDC, orangeBrush);
+		for (POINT r : road)
+		{
+			center = { startX + r.x * len + len / 2, startY + r.y * len + len / 2 };
+			Rectangle(hMemDC, center.x - len / 2, center.y - len / 2, center.x + len / 2, center.y + len / 2);
+		}
+		SelectObject(hMemDC, oldBrush);
 
 		oldBrush = (HBRUSH)SelectObject(hMemDC, blackBrush);
 		for (POINT block : blocks)
@@ -174,6 +190,7 @@ public:
 		DeleteObject(redBrush);
 		DeleteObject(blueBrush);
 		DeleteObject(greenBrush);
+		DeleteObject(orangeBrush);
 		DeleteObject(hMemBitmap);
 		DeleteObject(oldFont);
 		DeleteDC(hMemDC);
@@ -181,50 +198,78 @@ public:
 	void AStarMapSet()
 	{
 		//맵 세팅 및 경로 저장
+
+		map[s.y][s.x].g = 0;
+		map[s.y][s.x].h = calculateH(s.x, s.y);
+		map[s.y][s.x].f = map[s.y][s.x].g + map[s.y][s.x].h;
+
 		priority_queue<pair<int, pair<int, int>>, vector<pair<int, pair<int, int>>>, greater<pair<int, pair<int, int>>>> q;
-		q.push({ map[s.y][s.x].f, {s.x, s.y} });
-		while (q.size())
-		{
-			pair<int, int> now = q.top().second;
-			map[now.second][now.first].tState = CLOSE;
+		q.push({ map[s.y][s.x].f, { s.x, s.y } });
+
+		while (q.size()) {
+			pair<int, pair<int, int>> now = q.top();
 			q.pop();
 
-			for (int i = 0; i < 8; i++)
-			{
-				int nextX = dx[i] + now.first;
-				int nextY = dy[i] + now.second;
-				if (nextX < 0 || nextY < 0 || nextX >= colSize || nextY >= rowSize)
-					continue;
-				if (map[nextY][nextX].tState == CLOSE || map[nextY][nextX].tState == WALL)
-					continue;
-				if (e.x == nextX && e.y == nextY)
-				{
+			for (int i = 0; i < 8; i++) {
+				int nx = now.second.first + dx[i];
+				int ny = now.second.second + dy[i];
+				
+
+				if (ny < 0 || nx < 0 || ny >= rowSize || nx >= colSize) continue;
+				if (map[ny][nx].tState == WALL || map[ny][nx].tState == START ) continue;
+				if (map[ny][nx].tState == END) {
+					map[ny][nx].prev = { now.second.first, now.second.second };
 					return;
 				}
-				if (map[nextY][nextX].tState == OPEN)
-				{
-					int g = map[now.second][now.first].g + ((i % 2) == 0 ? 10 : 14);
-					int h = abs(e.x - nextX) > abs(e.y - nextY) ? abs(e.y - nextY) * 14 : abs(e.x - nextX) * 14 + abs(abs(e.x - nextX) - abs(e.y - nextY)) * 10;
-					int f = g + h;
-					if (map[nextY][nextX].f > f)
-						map[nextY][nextX].f = f;
-				}
-				else
-				{
-					map[nextY][nextX].tState = OPEN;
-					map[nextY][nextX].g = map[now.second][now.first].g + ((i % 2) == 0 ? 10 : 14);
-					map[nextY][nextX].h = abs(e.x - nextX) > abs(e.y - nextY) ? abs(e.y - nextY) * 14 : abs(e.x - nextX) * 14;
-					map[nextY][nextX].h += abs(abs(e.x - nextX) - abs(e.y - nextY)) * 10;
-					map[nextY][nextX].f = map[nextY][nextX].g + map[nextY][nextX].h;
-					q.push({ map[nextY][nextX].f, {nextX, nextY} });
-				}
+				map[ny][nx].tState = OPEN;
+				int ng = map[now.second.second][now.second.first].g + (i % 2 == 0 ? 10 : 14);
+				int nh = calculateH(nx, ny);
+				int nf = ng + nh;
+				if (map[ny][nx].f != -1 && map[ny][nx].f < nf) continue;
+				map[ny][nx].g = ng;
+				map[ny][nx].h = nh;
+				map[ny][nx].f = nf;
+				map[ny][nx].prev = { now.second.first, now.second.second };
+				q.push({ map[ny][nx].f, {nx, ny} });
 			}
 		}
 	}
+	void _SetRoad(int y, int x) {
+		if (y == s.y && x == s.x) {
+			road.push_back({ x, y });
+			playerMove.push_back({ x, y });
+			return;
+		}
+
+		road.push_back({ x, y });
+		playerMove.push_back({ x, y });
+		_SetRoad(map[y][x].prev.y, map[y][x].prev.x);
+	}
+
+	void SetRoad() {
+		_SetRoad(e.y, e.x);
+	}
 	void Update()
 	{
-
+		if (playerMove.empty()) {
+			SetStateNext();
+			return;
+		}
+		player.x = playerMove.back().x;
+		player.y = playerMove.back().y;
+		playerMove.pop_back();
 	}
+
+	int calculateH(int x, int y) {
+		int width = abs(x - e.x);
+		int height = abs(y - e.y);
+
+		int res = width > height ? height * 14 : width * 14;
+		res += abs(width - height) * 10;
+		
+		return res;
+	}
+
 	bool IsInMap(int x, int y)
 	{
 		if (x < 0) return false;

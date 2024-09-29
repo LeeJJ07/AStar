@@ -108,6 +108,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     static AStar* aStar;
     int cursorX = 0, cursorY = 0;
     static bool rBdown = false;
+    static bool wheelBdown = false;
     switch (message)
     {
     case WM_CREATE:
@@ -148,9 +149,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 (cursorY - aStar->GetMapStartPos().y) / aStar->GetTileLen());
             aStar->AStarMapSet();
             aStar->SetStateNext();
+            aStar->SetRoad();
             break;
         case FINISH:
             aStar->SetStateNext();
+            aStar->SetMap();
             break;
         }
     }
@@ -173,6 +176,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_RBUTTONUP:
         rBdown = false;
         break;
+
     case WM_COMMAND:
     {
         int wmId = LOWORD(wParam);
@@ -203,6 +207,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         PostQuitMessage(0);
         KillTimer(hWnd, TIMER_01);  // 타이머 해제
+        KillTimer(hWnd, TIMER_02);  // 타이머 해제
         break;
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);
